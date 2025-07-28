@@ -1,0 +1,146 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base configuration
+resources:
+- ../../base
+
+# Namespace for production
+namespace: homegenie-prod
+
+# Production-specific labels
+commonLabels:
+  environment: production
+  
+# Production-specific annotations
+commonAnnotations:
+  environment: production
+
+# Images for production (use specific tags, not latest)
+images:
+- name: your-registry/homegenie-backend
+  newTag: v1.0.0
+- name: your-registry/homegenie-frontend
+  newTag: v1.0.0
+
+# ConfigMap generator for production
+configMapGenerator:
+- name: homegenie-config
+  behavior: merge
+  literals:
+  - ENVIRONMENT=production
+  - LOG_LEVEL=info
+  - CORS_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
+  - API_HOST=0.0.0.0
+  - API_PORT=8080
+
+# Production secrets (should be managed externally)
+secretGenerator:
+- name: homegenie-secrets
+  behavior: replace
+  files:
+  - secrets.env
+
+# Production replica counts
+replicas:
+- name: homegenie-backend
+  count: 3
+- name: homegenie-frontend
+  count: 2
+- name: postgres
+  count: 1  # Consider using external managed database
+- name: redis
+  count: 1   # Consider Redis cluster for HA
+
+# Production patches
+patchesStrategicMerge:
+- backend-prod.yaml
+- frontend-prod.yaml
+- database-prod.yaml
+- ingress-prod.yaml
+- monitoring-prod.yaml
+
+# JSON patches for production optimizations
+patchesJson6902:
+# Increase backend HPA limits
+- target:
+    group: autoscaling
+    version: v2
+    kind: HorizontalPodAutoscaler
+    name: homegenie-backend-hpa
+  patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 3
+    - op: replace
+      path: /spec/maxReplicas
+      value: 20
+    - op: replace
+      path: /spec/metrics/0/resource/target/averageUtilization
+      value: 60
+
+# Increase frontend HPA limits
+- target:
+    group: autoscaling
+    version: v2
+    kind: HorizontalPodAutoscaler
+    name: homegenie-frontend-hpa
+  patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 2
+    - op: replace
+      path: /spec/maxReplicas
+      value: 10
+    - op: replace
+      path: /spec/metrics/0/resource/target/averageUtilization
+      value: 60
+
+# Add node affinity for production workloads
+- target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: homegenie-backend
+  patch: |-
+    - op: add
+      path: /spec/template/spec/affinity
+      value:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - compute-optimized
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - homegenie-backend
+              topologyKey: kubernetes.io/hostname
+
+- target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: postgres
+  patch: |-
+    - op: add
+      path: /spec/template/spec/affinity
+      value:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - storage-optimized

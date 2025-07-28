@@ -1,0 +1,315 @@
+# AlertManager Configuration for HomeGenie
+
+global:
+  # SMTP configuration for email alerts
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@yourdomain.com'
+  smtp_auth_username: 'alerts@yourdomain.com'
+  smtp_auth_password: 'your-smtp-app-password'
+  smtp_require_tls: true
+
+  # HTTP configuration for webhooks
+  http_config:
+    tls_config:
+      insecure_skip_verify: false
+
+# Templates for alert formatting
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Routing configuration
+route:
+  # Root route configuration
+  group_by: ['alertname', 'service', 'severity']
+  group_wait: 10s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: 'default-receiver'
+  
+  # Specific routing rules
+  routes:
+  # Critical alerts - immediate notification
+  - match:
+      severity: critical
+    receiver: 'critical-alerts'
+    group_wait: 0s
+    group_interval: 1m
+    repeat_interval: 5m
+    continue: true
+
+  # Database alerts - send to DBA team
+  - match_re:
+      service: postgres|redis
+    receiver: 'database-team'
+    group_by: ['alertname', 'service']
+    repeat_interval: 30m
+
+  # Infrastructure alerts
+  - match:
+      team: infrastructure
+    receiver: 'infrastructure-team'
+    group_by: ['alertname', 'service']
+    repeat_interval: 1h
+
+  # Security alerts
+  - match:
+      team: security
+    receiver: 'security-team'
+    group_wait: 0s
+    repeat_interval: 15m
+
+  # Business/Product alerts
+  - match:
+      team: product
+    receiver: 'product-team'
+    repeat_interval: 4h
+
+  # Development environment alerts (lower priority)
+  - match:
+      environment: development
+    receiver: 'dev-team'
+    repeat_interval: 24h
+
+# Inhibition rules to suppress redundant alerts
+inhibit_rules:
+# Suppress warning alerts if critical alert is firing
+- source_match:
+    severity: critical
+  target_match:
+    severity: warning
+  equal: ['alertname', 'service']
+
+# Suppress container alerts if the host is down
+- source_match:
+    alertname: HomeGenieBackendDown
+  target_match_re:
+    alertname: HomeGenieContainer.*
+  equal: ['service']
+
+# Suppress high error rate if service is down
+- source_match_re:
+    alertname: HomeGenie.*Down
+  target_match:
+    alertname: HomeGenieHighErrorRate
+  equal: ['service']
+
+# Receivers configuration
+receivers:
+# Default receiver
+- name: 'default-receiver'
+  email_configs:
+  - to: 'team@yourdomain.com'
+    subject: 'HomeGenie Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      **Alert:** {{ .Annotations.summary }}
+      **Description:** {{ .Annotations.description }}
+      **Severity:** {{ .Labels.severity }}
+      **Service:** {{ .Labels.service }}
+      **Started:** {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+      
+      **Labels:**
+      {{ range .Labels.SortedPairs }}• {{ .Name }}: {{ .Value }}
+      {{ end }}
+      
+      {{ if .Annotations.runbook_url }}**Runbook:** {{ .Annotations.runbook_url }}{{ end }}
+      {{ if .Annotations.dashboard_url }}**Dashboard:** {{ .Annotations.dashboard_url }}{{ end }}
+      {{ end }}
+    html: |
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; }
+          .alert { margin: 20px 0; padding: 15px; border-left: 4px solid #f44336; background-color: #ffebee; }
+          .critical { border-left-color: #f44336; background-color: #ffebee; }
+          .warning { border-left-color: #ff9800; background-color: #fff3e0; }
+          .info { border-left-color: #2196f3; background-color: #e3f2fd; }
+          .resolved { border-left-color: #4caf50; background-color: #e8f5e8; }
+          .label { background-color: #e0e0e0; padding: 2px 6px; border-radius: 3px; margin: 2px; }
+        </style>
+      </head>
+      <body>
+        <h2>HomeGenie Alert Notification</h2>
+        {{ range .Alerts }}
+        <div class="alert {{ .Labels.severity }}">
+          <h3>{{ .Annotations.summary }}</h3>
+          <p><strong>Description:</strong> {{ .Annotations.description }}</p>
+          <p><strong>Service:</strong> {{ .Labels.service }}</p>
+          <p><strong>Severity:</strong> {{ .Labels.severity }}</p>
+          <p><strong>Started:</strong> {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}</p>
+          
+          {{ if .Annotations.runbook_url }}
+          <p><a href="{{ .Annotations.runbook_url }}">📖 Runbook</a></p>
+          {{ end }}
+          
+          {{ if .Annotations.dashboard_url }}
+          <p><a href="{{ .Annotations.dashboard_url }}">📊 Dashboard</a></p>
+          {{ end }}
+          
+          <p><strong>Labels:</strong><br>
+          {{ range .Labels.SortedPairs }}
+          <span class="label">{{ .Name }}: {{ .Value }}</span>
+          {{ end }}
+          </p>
+        </div>
+        {{ end }}
+      </body>
+      </html>
+
+# Critical alerts - multiple channels
+- name: 'critical-alerts'
+  email_configs:
+  - to: 'critical@yourdomain.com,oncall@yourdomain.com'
+    subject: '🚨 CRITICAL: HomeGenie Alert - {{ .GroupLabels.alertname }}'
+    body: |
+      🚨 CRITICAL ALERT 🚨
+      
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Service: {{ .Labels.service }}
+      Started: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+      
+      {{ if .Annotations.runbook_url }}Runbook: {{ .Annotations.runbook_url }}{{ end }}
+      {{ if .Annotations.dashboard_url }}Dashboard: {{ .Annotations.dashboard_url }}{{ end }}
+      {{ end }}
+      
+      This is a critical alert that requires immediate attention.
+  
+  # Slack webhook for critical alerts
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+    channel: '#critical-alerts'
+    username: 'HomeGenie AlertManager'
+    icon_emoji: ':rotating_light:'
+    title: '🚨 Critical Alert: {{ .GroupLabels.alertname }}'
+    text: |
+      {{ range .Alerts }}
+      **{{ .Annotations.summary }}**
+      {{ .Annotations.description }}
+      
+      *Service:* {{ .Labels.service }}
+      *Severity:* {{ .Labels.severity }}
+      *Started:* {{ .StartsAt.Format "15:04:05 UTC" }}
+      
+      {{ if .Annotations.runbook_url }}<{{ .Annotations.runbook_url }}|📖 Runbook>{{ end }}
+      {{ if .Annotations.dashboard_url }} | <{{ .Annotations.dashboard_url }}|📊 Dashboard>{{ end }}
+      {{ end }}
+    color: 'danger'
+  
+  # PagerDuty integration for critical alerts
+  pagerduty_configs:
+  - routing_key: 'your-pagerduty-integration-key'
+    description: 'HomeGenie Critical Alert: {{ .GroupLabels.alertname }}'
+    details:
+      service: '{{ .GroupLabels.service }}'
+      severity: '{{ .GroupLabels.severity }}'
+      environment: '{{ .GroupLabels.environment }}'
+    links:
+    - href: '{{ .Annotations.runbook_url }}'
+      text: 'Runbook'
+    - href: '{{ .Annotations.dashboard_url }}'
+      text: 'Dashboard'
+
+# Database team
+- name: 'database-team'
+  email_configs:
+  - to: 'dba@yourdomain.com'
+    subject: 'Database Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      Database Alert Notification
+      
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Database: {{ .Labels.service }}
+      Started: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+      
+      Labels:
+      {{ range .Labels.SortedPairs }}• {{ .Name }}: {{ .Value }}
+      {{ end }}
+      {{ end }}
+
+# Infrastructure team
+- name: 'infrastructure-team'
+  email_configs:
+  - to: 'infrastructure@yourdomain.com'
+    subject: 'Infrastructure Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      Infrastructure Alert Notification
+      
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Component: {{ .Labels.service }}
+      Started: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+      {{ end }}
+
+# Security team
+- name: 'security-team'
+  email_configs:
+  - to: 'security@yourdomain.com'
+    subject: '🔒 Security Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      🔒 SECURITY ALERT
+      
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Service: {{ .Labels.service }}
+      Started: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+      
+      This security alert requires immediate investigation.
+      {{ end }}
+  
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/SECURITY/WEBHOOK'
+    channel: '#security-alerts'
+    username: 'HomeGenie Security'
+    icon_emoji: ':lock:'
+    title: '🔒 Security Alert: {{ .GroupLabels.alertname }}'
+    color: 'warning'
+
+# Product team
+- name: 'product-team'
+  email_configs:
+  - to: 'product@yourdomain.com'
+    subject: 'Product Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      Product/Business Alert
+      
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Impact: Business metrics or user experience
+      Started: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+      {{ end }}
+
+# Development team
+- name: 'dev-team'
+  email_configs:
+  - to: 'developers@yourdomain.com'
+    subject: 'Dev Environment Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      Development Environment Alert
+      
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Environment: {{ .Labels.environment }}
+      Started: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+      {{ end }}
+      
+      This is a development environment alert with lower priority.
+
+# Webhook receiver for custom integrations
+- name: 'webhook-receiver'
+  webhook_configs:
+  - url: 'http://your-webhook-endpoint/alerts'
+    send_resolved: true
+    http_config:
+      basic_auth:
+        username: 'webhook-user'
+        password: 'webhook-password'
+    max_alerts: 10

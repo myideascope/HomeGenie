@@ -1,0 +1,73 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Metadata
+metadata:
+  name: homegenie-base
+  annotations:
+    config.kubernetes.io/local-config: "true"
+
+# Namespace
+namespace: homegenie
+
+# Resources to include
+resources:
+- namespace.yaml
+- secrets.yaml
+- configmap.yaml
+- database.yaml
+- backend.yaml
+- frontend.yaml
+- ingress.yaml
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: homegenie
+  app.kubernetes.io/instance: homegenie
+  app.kubernetes.io/version: "1.0.0"
+  app.kubernetes.io/part-of: homegenie
+  app.kubernetes.io/managed-by: kustomize
+
+# Common annotations
+commonAnnotations:
+  deployment.kubernetes.io/revision: "1"
+
+# Images to be used (can be overridden in overlays)
+images:
+- name: your-registry/homegenie-backend
+  newTag: latest
+- name: your-registry/homegenie-frontend
+  newTag: latest
+
+# ConfigMap generator for additional configs
+configMapGenerator:
+- name: homegenie-version
+  literals:
+  - version=1.0.0
+  - build=latest
+  - environment=base
+
+# Secret generator (for non-sensitive defaults)
+secretGenerator:
+- name: homegenie-build-info
+  literals:
+  - build-time=unknown
+  - git-commit=unknown
+  type: Opaque
+
+# Resource transformations
+replicas:
+- name: homegenie-backend
+  count: 2
+- name: homegenie-frontend
+  count: 2
+- name: postgres
+  count: 1
+- name: redis
+  count: 1
+
+# Patches (can be overridden in overlays)
+patchesStrategicMerge: []
+
+# JSON patches
+patchesJson6902: []

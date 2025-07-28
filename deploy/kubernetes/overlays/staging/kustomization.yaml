@@ -1,0 +1,94 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base configuration
+resources:
+- ../../base
+
+# Namespace for staging
+namespace: homegenie-staging
+
+# Staging-specific labels
+commonLabels:
+  environment: staging
+  
+# Staging-specific annotations
+commonAnnotations:
+  environment: staging
+
+# Images for staging (use staging tags)
+images:
+- name: your-registry/homegenie-backend
+  newTag: staging
+- name: your-registry/homegenie-frontend
+  newTag: staging
+
+# ConfigMap generator for staging
+configMapGenerator:
+- name: homegenie-config
+  behavior: merge
+  literals:
+  - ENVIRONMENT=staging
+  - LOG_LEVEL=info
+  - CORS_ORIGINS=https://staging.yourdomain.com
+  - API_HOST=0.0.0.0
+  - API_PORT=8080
+
+# Staging secrets
+secretGenerator:
+- name: homegenie-secrets
+  behavior: replace
+  literals:
+  - DB_PASSWORD=staging-password-secure
+  - JWT_SECRET=staging-jwt-secret-minimum-32-characters
+  - DATABASE_URL=postgresql://homegenie:staging-password-secure@postgres:5432/homegenie
+
+# Staging replica counts (smaller than production)
+replicas:
+- name: homegenie-backend
+  count: 2
+- name: homegenie-frontend
+  count: 1
+- name: postgres
+  count: 1
+- name: redis
+  count: 1
+
+# Staging patches
+patchesStrategicMerge:
+- backend-staging.yaml
+- frontend-staging.yaml
+- database-staging.yaml
+- ingress-staging.yaml
+
+# JSON patches for staging optimizations
+patchesJson6902:
+# Adjust HPA for staging
+- target:
+    group: autoscaling
+    version: v2
+    kind: HorizontalPodAutoscaler
+    name: homegenie-backend-hpa
+  patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 2
+    - op: replace
+      path: /spec/maxReplicas
+      value: 5
+    - op: replace
+      path: /spec/metrics/0/resource/target/averageUtilization
+      value: 70
+
+- target:
+    group: autoscaling
+    version: v2
+    kind: HorizontalPodAutoscaler
+    name: homegenie-frontend-hpa
+  patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 1
+    - op: replace
+      path: /spec/maxReplicas
+      value: 3

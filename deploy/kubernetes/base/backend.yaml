@@ -1,0 +1,267 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homegenie-backend
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: homegenie-backend
+    app.kubernetes.io/instance: homegenie
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: homegenie
+    app.kubernetes.io/managed-by: kubernetes
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homegenie-backend
+      app.kubernetes.io/instance: homegenie
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: homegenie-backend
+        app.kubernetes.io/instance: homegenie
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: backend
+        image: your-registry/homegenie-backend:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: homegenie-config
+        - secretRef:
+            name: homegenie-secrets
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        volumeMounts:
+        - name: uploads
+          mountPath: /app/uploads
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      initContainers:
+      - name: migrate
+        image: your-registry/homegenie-backend:latest
+        command: ["./migrate"]
+        envFrom:
+        - configMapRef:
+            name: homegenie-config
+        - secretRef:
+            name: homegenie-secrets
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: uploads
+        persistentVolumeClaim:
+          claimName: homegenie-uploads-pvc
+      - name: tmp
+        emptyDir: {}
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: homegenie-uploads-pvc
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: homegenie-backend
+    app.kubernetes.io/instance: homegenie
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany  # Allow multiple pods to access uploads
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homegenie-backend
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: homegenie-backend
+    app.kubernetes.io/instance: homegenie
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app.kubernetes.io/name: homegenie-backend
+    app.kubernetes.io/instance: homegenie
+
+---
+# Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: homegenie-backend-hpa
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: homegenie-backend
+    app.kubernetes.io/instance: homegenie
+    app.kubernetes.io/component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: homegenie-backend
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: homegenie-backend-pdb
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: homegenie-backend
+    app.kubernetes.io/instance: homegenie
+    app.kubernetes.io/component: backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homegenie-backend
+      app.kubernetes.io/instance: homegenie
+
+---
+# Service Monitor for Prometheus (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: homegenie-backend
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: homegenie-backend
+    app.kubernetes.io/instance: homegenie
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homegenie-backend
+      app.kubernetes.io/instance: homegenie
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s

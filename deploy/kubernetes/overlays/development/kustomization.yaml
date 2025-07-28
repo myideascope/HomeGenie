@@ -1,0 +1,88 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base configuration
+resources:
+- ../../base
+
+# Namespace for development
+namespace: homegenie-dev
+
+# Environment-specific labels
+commonLabels:
+  environment: development
+  
+# Environment-specific annotations
+commonAnnotations:
+  environment: development
+  config.kubernetes.io/local-config: "true"
+
+# Images for development (use latest or dev tags)
+images:
+- name: your-registry/homegenie-backend
+  newTag: dev
+- name: your-registry/homegenie-frontend
+  newTag: dev
+
+# ConfigMap generator for development
+configMapGenerator:
+- name: homegenie-config
+  behavior: merge
+  literals:
+  - ENVIRONMENT=development
+  - LOG_LEVEL=debug
+  - CORS_ORIGINS=http://localhost:3000,http://homegenie.local
+  - API_HOST=0.0.0.0
+  - API_PORT=8080
+
+# Development-specific secrets
+secretGenerator:
+- name: homegenie-secrets
+  behavior: replace
+  literals:
+  - DB_PASSWORD=dev-password
+  - JWT_SECRET=dev-jwt-secret-for-development-only
+  - DATABASE_URL=postgresql://homegenie:dev-password@postgres:5432/homegenie
+
+# Reduce resource requirements for development
+replicas:
+- name: homegenie-backend
+  count: 1
+- name: homegenie-frontend
+  count: 1
+
+# Development patches
+patchesStrategicMerge:
+- backend-dev.yaml
+- frontend-dev.yaml
+- database-dev.yaml
+- ingress-dev.yaml
+
+# JSON patches for specific changes
+patchesJson6902:
+# Disable HPA in development
+- target:
+    group: autoscaling
+    version: v2
+    kind: HorizontalPodAutoscaler
+    name: homegenie-backend-hpa
+  patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 1
+    - op: replace
+      path: /spec/maxReplicas
+      value: 2
+
+- target:
+    group: autoscaling
+    version: v2
+    kind: HorizontalPodAutoscaler
+    name: homegenie-frontend-hpa
+  patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 1
+    - op: replace
+      path: /spec/maxReplicas
+      value: 2

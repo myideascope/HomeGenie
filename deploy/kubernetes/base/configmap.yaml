@@ -1,0 +1,195 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homegenie-config
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: homegenie
+    app.kubernetes.io/instance: homegenie
+    app.kubernetes.io/component: config
+data:
+  # API Configuration
+  API_PORT: "8080"
+  API_HOST: "0.0.0.0"
+  
+  # Database Configuration
+  DB_HOST: "postgres"
+  DB_PORT: "5432"
+  DB_NAME: "homegenie"
+  DB_USER: "homegenie"
+  
+  # Redis Configuration
+  REDIS_URL: "redis://redis:6379"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  
+  # Application Configuration
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "info"
+  JWT_EXPIRY: "24h"
+  
+  # CORS Configuration
+  CORS_ORIGINS: "http://localhost:3000,https://yourdomain.com"
+  
+  # File Upload Configuration
+  MAX_UPLOAD_SIZE: "10MB"
+  UPLOAD_PATH: "/app/uploads"
+  
+  # OpenTelemetry Configuration
+  OTEL_SERVICE_NAME: "homegenie-api"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:14268/api/traces"
+  OTEL_RESOURCE_ATTRIBUTES: "service.name=homegenie,service.version=1.0.0,deployment.environment=production"
+  
+  # Optional: SMTP Configuration
+  SMTP_HOST: "smtp.gmail.com"
+  SMTP_PORT: "587"
+  SMTP_USER: "your-email@gmail.com"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/instance: homegenie-postgres
+    app.kubernetes.io/component: database
+data:
+  # PostgreSQL Configuration
+  POSTGRES_DB: "homegenie"
+  POSTGRES_USER: "homegenie"
+  
+  # PostgreSQL Settings
+  postgresql.conf: |
+    # Memory settings
+    shared_buffers = 128MB
+    effective_cache_size = 512MB
+    
+    # Connection settings
+    max_connections = 100
+    
+    # Logging
+    log_destination = 'stderr'
+    log_statement = 'all'
+    log_min_duration_statement = 1000
+    
+    # Checkpoints
+    checkpoint_completion_target = 0.9
+    
+    # WAL settings
+    wal_buffers = 16MB
+    
+    # Query planner
+    random_page_cost = 1.1
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: homegenie
+  labels:
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/instance: homegenie-frontend
+    app.kubernetes.io/component: frontend
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        # Logging
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for"';
+        access_log /var/log/nginx/access.log main;
+
+        # Performance
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        client_max_body_size 10M;
+
+        # Gzip compression
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types
+            application/atom+xml
+            application/geo+json
+            application/javascript
+            application/x-javascript
+            application/json
+            application/ld+json
+            application/manifest+json
+            application/rdf+xml
+            application/rss+xml
+            application/xhtml+xml
+            application/xml
+            font/eot
+            font/otf
+            font/ttf
+            image/svg+xml
+            text/css
+            text/javascript
+            text/plain
+            text/xml;
+
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "no-referrer-when-downgrade" always;
+        add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+
+        server {
+            listen 3000;
+            server_name localhost;
+            root /usr/share/nginx/html;
+            index index.html index.htm;
+
+            # React Router support
+            location / {
+                try_files $uri $uri/ /index.html;
+            }
+
+            # Health check endpoint
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+
+            # Static assets caching
+            location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+                expires 1y;
+                add_header Cache-Control "public, no-transform";
+            }
+
+            # API proxy (optional)
+            location /api/ {
+                proxy_pass http://homegenie-backend:8080/api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_buffering off;
+            }
+        }
+    }

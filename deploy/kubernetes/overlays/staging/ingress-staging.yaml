@@ -1,0 +1,124 @@
+# Staging ingress configuration
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homegenie-ingress
+  annotations:
+    # Staging SSL/TLS configuration
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    
+    # Staging CORS configuration (more permissive)
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://staging.yourdomain.com,https://test.yourdomain.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,X-Test-Header"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    
+    # Relaxed rate limiting for staging testing
+    nginx.ingress.kubernetes.io/rate-limit-connections: "50"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/rate-limit-rpm: "1000"
+    
+    # Staging-specific headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Environment "staging" always;
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "no-referrer-when-downgrade" always;
+      add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https:; connect-src 'self' https://staging.yourdomain.com wss://staging.yourdomain.com" always;
+      
+      # Enable additional debugging headers in staging  
+      add_header X-Request-ID $request_id always;
+      add_header X-Response-Time $request_time always;
+    
+    # Use staging certificate issuer
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+    
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - staging.yourdomain.com
+    - test.yourdomain.com
+    secretName: homegenie-tls-staging
+  rules:
+  # Staging domain
+  - host: staging.yourdomain.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: homegenie-backend
+            port:
+              number: 8080
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: homegenie-backend
+            port:
+              number: 8080
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: homegenie-backend
+            port:
+              number: 8080
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: homegenie-frontend
+            port:
+              number: 80
+  
+  # Test domain (for QA)
+  - host: test.yourdomain.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: homegenie-backend
+            port:
+              number: 8080
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: homegenie-frontend
+            port:
+              number: 80
+
+---
+# Remove development and production ingresses in staging
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homegenie-ingress-local
+spec:
+  rules: []  # Disable local development ingress
+
+---
+# Staging certificate (managed by cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: homegenie-tls-staging
+  labels:
+    app.kubernetes.io/name: homegenie-certificate-staging
+    app.kubernetes.io/component: security
+spec:
+  secretName: homegenie-tls-staging
+  issuerRef:
+    name: letsencrypt-staging
+    kind: ClusterIssuer
+  dnsNames:
+  - staging.yourdomain.com
+  - test.yourdomain.com

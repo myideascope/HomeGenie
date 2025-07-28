@@ -1,0 +1,58 @@
+# Copy this file to terraform.tfvars and fill in the values
+
+# Project Configuration
+project_id   = "your-gcp-project-id"
+region       = "us-central1"
+environment  = "production"
+project_name = "homegenie"
+
+# Network Configuration
+subnet_cidr    = "10.0.0.0/24"
+services_cidr  = "10.1.0.0/20"
+pods_cidr      = "10.2.0.0/20"
+connector_cidr = "10.3.0.0/28"
+
+# Database Configuration
+db_name               = "homegenie"
+db_username           = "homegenie"
+db_password           = "your-super-secure-database-password-here"
+postgres_version      = "POSTGRES_15"
+db_instance_class     = "db-f1-micro"  # Use db-custom-2-4096 or larger for production
+backup_retention_days = 7
+
+# Container Images (replace PROJECT_ID with your actual project ID)
+backend_image      = "gcr.io/your-gcp-project-id/homegenie-backend"
+backend_image_tag  = "latest"
+frontend_image     = "gcr.io/your-gcp-project-id/homegenie-frontend"
+frontend_image_tag = "latest"
+
+# Cloud Run Configuration
+backend_cpu    = "1000m"
+backend_memory = "2Gi"
+frontend_cpu   = "1000m"
+frontend_memory = "1Gi"
+
+# Scaling Configuration
+backend_min_instances  = 1
+backend_max_instances  = 10
+frontend_min_instances = 1
+frontend_max_instances = 5
+
+# Application Secrets
+jwt_secret = "your-super-secret-jwt-key-minimum-32-characters-long"
+
+# Load Balancer Configuration (optional)
+enable_load_balancer = false
+domain_name         = ""  # Set to your domain if using load balancer
+
+# Monitoring Configuration
+enable_monitoring = true
+log_level        = "INFO"
+
+# Labels
+labels = {
+  managed-by  = "terraform"
+  project     = "homegenie"
+  environment = "production"
+  team        = "devops"
+}

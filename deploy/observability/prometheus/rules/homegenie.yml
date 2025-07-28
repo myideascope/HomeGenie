@@ -1,0 +1,317 @@
+# HomeGenie Prometheus Alert Rules
+
+groups:
+- name: homegenie.application
+  rules:
+  # High error rate
+  - alert: HomeGenieHighErrorRate
+    expr: |
+      (
+        sum(rate(http_requests_total{job="homegenie-backend",code=~"5.."}[5m]))
+        /
+        sum(rate(http_requests_total{job="homegenie-backend"}[5m]))
+      ) > 0.05
+    for: 2m
+    labels:
+      severity: critical
+      service: homegenie-backend
+      team: backend
+    annotations:
+      summary: "HomeGenie backend has high error rate"
+      description: "HomeGenie backend error rate is {{ $value | humanizePercentage }} for the last 5 minutes, which is above the 5% threshold."
+      runbook_url: "https://runbooks.yourdomain.com/homegenie/high-error-rate"
+      dashboard_url: "http://grafana:3000/d/homegenie/homegenie-overview"
+
+  # High response time
+  - alert: HomeGenieHighResponseTime
+    expr: |
+      histogram_quantile(0.95,
+        sum(rate(http_request_duration_seconds_bucket{job="homegenie-backend"}[5m])) by (le)
+      ) > 2
+    for: 5m
+    labels:
+      severity: warning
+      service: homegenie-backend
+      team: backend
+    annotations:
+      summary: "HomeGenie backend has high response time"
+      description: "HomeGenie backend 95th percentile response time is {{ $value }}s, which is above the 2s threshold."
+      runbook_url: "https://runbooks.yourdomain.com/homegenie/high-response-time"
+
+  # Low request rate (possible downtime)
+  - alert: HomeGenieLowRequestRate
+    expr: |
+      sum(rate(http_requests_total{job="homegenie-backend"}[5m])) < 0.1
+    for: 5m
+    labels:
+      severity: warning
+      service: homegenie-backend
+      team: backend
+    annotations:
+      summary: "HomeGenie backend has unusually low request rate"
+      description: "HomeGenie backend is receiving {{ $value }} requests/second, which is below the expected minimum of 0.1 req/s."
+
+  # Application is down
+  - alert: HomeGenieBackendDown
+    expr: up{job="homegenie-backend"} == 0
+    for: 1m
+    labels:
+      severity: critical
+      service: homegenie-backend
+      team: backend
+    annotations:
+      summary: "HomeGenie backend is down"
+      description: "HomeGenie backend has been down for more than 1 minute."
+      runbook_url: "https://runbooks.yourdomain.com/homegenie/service-down"
+
+  - alert: HomeGenieFrontendDown
+    expr: up{job="homegenie-frontend"} == 0
+    for: 1m
+    labels:
+      severity: critical
+      service: homegenie-frontend
+      team: frontend
+    annotations:
+      summary: "HomeGenie frontend is down"
+      description: "HomeGenie frontend has been down for more than 1 minute."
+
+- name: homegenie.infrastructure
+  rules:
+  # Database connection issues
+  - alert: HomeGenieDatabaseDown
+    expr: up{job="postgres-exporter"} == 0
+    for: 1m
+    labels:
+      severity: critical
+      service: postgres
+      team: database
+    annotations:
+      summary: "HomeGenie database is down"
+      description: "PostgreSQL database for HomeGenie is not responding."
+      runbook_url: "https://runbooks.yourdomain.com/postgres/database-down"
+
+  # High database connections
+  - alert: HomeGenieHighDatabaseConnections
+    expr: |
+      (
+        pg_stat_activity_count{job="postgres-exporter"}
+        /
+        pg_settings_max_connections{job="postgres-exporter"}
+      ) > 0.8
+    for: 5m
+    labels:
+      severity: warning
+      service: postgres
+      team: database
+    annotations:
+      summary: "HomeGenie database has high connection usage"
+      description: "PostgreSQL connection usage is {{ $value | humanizePercentage }}, which is above 80%."
+
+  # Slow database queries
+  - alert: HomeGenieSlowQueries
+    expr: pg_stat_activity_max_tx_duration{job="postgres-exporter"} > 300
+    for: 2m
+    labels:
+      severity: warning
+      service: postgres
+      team: database
+    annotations:
+      summary: "HomeGenie database has slow running queries"
+      description: "A query has been running for {{ $value }}s, which is longer than 5 minutes."
+
+  # Redis connection issues
+  - alert: HomeGenieRedisDown
+    expr: up{job="redis-exporter"} == 0
+    for: 1m
+    labels:
+      severity: warning
+      service: redis
+      team: backend
+    annotations:
+      summary: "HomeGenie Redis is down"
+      description: "Redis instance for HomeGenie is not responding."
+
+  # High Redis memory usage
+  - alert: HomeGenieRedisHighMemoryUsage
+    expr: |
+      (
+        redis_memory_used_bytes{job="redis-exporter"}
+        /
+        redis_memory_max_bytes{job="redis-exporter"}
+      ) > 0.9
+    for: 5m
+    labels:
+      severity: warning
+      service: redis
+      team: backend
+    annotations:
+      summary: "HomeGenie Redis high memory usage"
+      description: "Redis memory usage is {{ $value | humanizePercentage }}, which is above 90%."
+
+- name: homegenie.resources
+  rules:
+  # High CPU usage
+  - alert: HomeGenieHighCPUUsage
+    expr: |
+      (
+        avg without (cpu) (
+          irate(node_cpu_seconds_total{job="node-exporter",mode!="idle"}[5m])
+        )
+      ) > 0.85
+    for: 10m
+    labels:
+      severity: warning
+      service: system
+      team: infrastructure
+    annotations:
+      summary: "HomeGenie server has high CPU usage"
+      description: "CPU usage is {{ $value | humanizePercentage }}, which has been above 85% for 10 minutes."
+
+  # High memory usage
+  - alert: HomeGenieHighMemoryUsage
+    expr: |
+      (
+        1 - (
+          node_memory_MemAvailable_bytes{job="node-exporter"}
+          /
+          node_memory_MemTotal_bytes{job="node-exporter"}
+        )
+      ) > 0.9
+    for: 5m
+    labels:
+      severity: warning
+      service: system
+      team: infrastructure
+    annotations:
+      summary: "HomeGenie server has high memory usage"
+      description: "Memory usage is {{ $value | humanizePercentage }}, which is above 90%."
+
+  # Low disk space
+  - alert: HomeGenieLowDiskSpace
+    expr: |
+      (
+        1 - (
+          node_filesystem_avail_bytes{job="node-exporter",fstype!="tmpfs"}
+          /
+          node_filesystem_size_bytes{job="node-exporter",fstype!="tmpfs"}
+        )
+      ) > 0.85
+    for: 5m
+    labels:
+      severity: warning
+      service: system
+      team: infrastructure
+    annotations:
+      summary: "HomeGenie server has low disk space"
+      description: "Disk usage on {{ $labels.mountpoint }} is {{ $value | humanizePercentage }}, which is above 85%."
+
+  # Critical disk space
+  - alert: HomeGenieCriticalDiskSpace
+    expr: |
+      (
+        1 - (
+          node_filesystem_avail_bytes{job="node-exporter",fstype!="tmpfs"}
+          /
+          node_filesystem_size_bytes{job="node-exporter",fstype!="tmpfs"}
+        )
+      ) > 0.95
+    for: 1m
+    labels:
+      severity: critical
+      service: system
+      team: infrastructure
+    annotations:
+      summary: "HomeGenie server has critical disk space"
+      description: "Disk usage on {{ $labels.mountpoint }} is {{ $value | humanizePercentage }}, which is above 95%."
+
+- name: homegenie.containers
+  rules:
+  # Container high CPU
+  - alert: HomeGenieContainerHighCPU
+    expr: |
+      (
+        rate(container_cpu_usage_seconds_total{name=~"homegenie-.*"}[5m])
+        /
+        container_spec_cpu_quota{name=~"homegenie-.*"} * container_spec_cpu_period{name=~"homegenie-.*"}
+      ) > 0.8
+    for: 10m
+    labels:
+      severity: warning
+      service: "{{ $labels.name }}"
+      team: backend
+    annotations:
+      summary: "HomeGenie container {{ $labels.name }} has high CPU usage"
+      description: "Container {{ $labels.name }} CPU usage is {{ $value | humanizePercentage }}."
+
+  # Container high memory
+  - alert: HomeGenieContainerHighMemory
+    expr: |
+      (
+        container_memory_working_set_bytes{name=~"homegenie-.*"}
+        /
+        container_spec_memory_limit_bytes{name=~"homegenie-.*"}
+      ) > 0.9
+    for: 5m
+    labels:
+      severity: warning
+      service: "{{ $labels.name }}"
+      team: backend
+    annotations:
+      summary: "HomeGenie container {{ $labels.name }} has high memory usage"
+      description: "Container {{ $labels.name }} memory usage is {{ $value | humanizePercentage }}."
+
+  # Container restart rate
+  - alert: HomeGenieContainerRestartingTooOften
+    expr: |
+      increase(container_start_time_seconds{name=~"homegenie-.*"}[1h]) > 3
+    for: 1m
+    labels:
+      severity: warning
+      service: "{{ $labels.name }}"
+      team: backend
+    annotations:
+      summary: "HomeGenie container {{ $labels.name }} is restarting too often"
+      description: "Container {{ $labels.name }} has restarted {{ $value }} times in the last hour."
+
+- name: homegenie.business
+  rules:
+  # Low user activity
+  - alert: HomeGenieLowUserActivity
+    expr: |
+      sum(increase(http_requests_total{job="homegenie-backend",code="200"}[1h])) < 10
+    for: 30m
+    labels:
+      severity: info
+      service: homegenie-backend
+      team: product
+    annotations:
+      summary: "HomeGenie has low user activity"
+      description: "HomeGenie has received only {{ $value }} successful requests in the last hour."
+
+  # High API latency for critical endpoints
+  - alert: HomeGenieHighAPILatency
+    expr: |
+      histogram_quantile(0.95,
+        sum(rate(http_request_duration_seconds_bucket{job="homegenie-backend",endpoint=~"/api/(auth|users|properties).*"}[5m])) by (le, endpoint)
+      ) > 1
+    for: 5m
+    labels:
+      severity: warning
+      service: homegenie-backend
+      team: backend
+    annotations:
+      summary: "HomeGenie critical API endpoint has high latency"
+      description: "API endpoint {{ $labels.endpoint }} has 95th percentile latency of {{ $value }}s."
+
+  # Authentication failures
+  - alert: HomeGenieHighAuthFailures
+    expr: |
+      sum(rate(http_requests_total{job="homegenie-backend",endpoint="/api/auth/login",code="401"}[5m])) > 1
+    for: 5m
+    labels:
+      severity: warning
+      service: homegenie-backend
+      team: security
+    annotations:
+      summary: "HomeGenie has high authentication failure rate"
+      description: "Authentication failure rate is {{ $value }} failures/second."

@@ -1,0 +1,72 @@
+# Development database configuration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  template:
+    spec:
+      containers:
+      - name: postgres
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        env:
+        - name: POSTGRES_DB
+          value: "homegenie_dev"
+        # Add development-specific environment variables
+        - name: POSTGRES_LOG_STATEMENT
+          value: "all"
+        - name: POSTGRES_LOG_MIN_DURATION_STATEMENT
+          value: "0"  # Log all statements in development
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  resources:
+    requests:
+      storage: 2Gi  # Smaller storage for development
+
+---
+# Development Redis configuration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  template:
+    spec:
+      containers:
+      - name: redis
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+        args:
+        - redis-server
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        - --appendonly
+        - "no"  # Disable persistence in development
+        - --save
+        - ""    # Disable automatic saves
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+spec:
+  resources:
+    requests:
+      storage: 100Mi  # Minimal storage for development

@@ -1,0 +1,169 @@
+# Production database configuration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  template:
+    spec:
+      containers:
+      - name: postgres
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        env:
+        - name: POSTGRES_DB
+          value: "homegenie"
+        # Production-specific PostgreSQL settings
+        - name: POSTGRES_SHARED_BUFFERS
+          value: "256MB"
+        - name: POSTGRES_EFFECTIVE_CACHE_SIZE
+          value: "2GB"
+        - name: POSTGRES_MAX_CONNECTIONS
+          value: "200"
+        # Disable statement logging in production for performance
+        - name: POSTGRES_LOG_STATEMENT
+          value: "none"
+        - name: POSTGRES_LOG_MIN_DURATION_STATEMENT
+          value: "5000"  # Only log slow queries (>5s)
+      # Add node selector for database workloads
+      nodeSelector:
+        workload-type: database
+      # Add tolerations if using tainted nodes
+      tolerations:
+      - key: "database-workload"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  resources:
+    requests:
+      storage: 100Gi  # Production storage size
+  storageClassName: fast-ssd  # Use high-performance storage class
+
+---
+# Production Redis configuration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  template:
+    spec:
+      containers:
+      - name: redis
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        args:
+        - redis-server
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        - --appendonly
+        - "yes"
+        - --save
+        - "900 1"
+        - --save
+        - "300 10"
+        - --save
+        - "60 10000"
+        # Production Redis optimizations
+        - --maxmemory
+        - "768mb"
+        - --maxmemory-policy
+        - "allkeys-lru"
+        - --tcp-keepalive
+        - "300"
+        - --timeout
+        - "0"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+spec:
+  resources:
+    requests:
+      storage: 10Gi  # Production Redis storage
+  storageClassName: fast-ssd
+
+---
+# Production database backup job
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: postgres-backup
+            image: postgres:15-alpine
+            command:
+            - /bin/sh
+            - -c
+            - |
+              BACKUP_FILE="/backup/postgres-backup-$(date +%Y%m%d-%H%M%S).sql"
+              pg_dump "$DATABASE_URL" > "$BACKUP_FILE"
+              echo "Backup completed: $BACKUP_FILE"
+              
+              # Keep only last 7 days of backups
+              find /backup -name "postgres-backup-*.sql" -mtime +7 -delete
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: homegenie-secrets
+                  key: DATABASE_URL
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: postgres-backup-pvc
+          restartPolicy: OnFailure
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backup-pvc
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    app.kubernetes.io/component: backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi  # Storage for backups
+  storageClassName: standard  # Use cheaper storage for backups

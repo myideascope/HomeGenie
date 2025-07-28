@@ -1,0 +1,70 @@
+# Development ingress configuration
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homegenie-ingress
+  annotations:
+    # Remove SSL redirect for development
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    
+    # Allow all CORS origins in development
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    
+    # Remove rate limiting for development
+    # nginx.ingress.kubernetes.io/rate-limit-connections: ""
+    # nginx.ingress.kubernetes.io/rate-limit-window: ""
+    
+    # Development-specific headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Development-Mode "true" always;
+      add_header Access-Control-Allow-Origin "*" always;
+      add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+      add_header Access-Control-Allow-Headers "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization" always;
+spec:
+  ingressClassName: nginx
+  # Remove TLS for development
+  tls: []
+  rules:
+  - host: homegenie.local
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: homegenie-backend
+            port:
+              number: 8080
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: homegenie-backend
+            port:
+              number: 8080
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: homegenie-backend
+            port:
+              number: 8080
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: homegenie-frontend
+            port:
+              number: 80
+
+---
+# Remove production ingress in development
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homegenie-ingress-local
+spec:
+  rules: []  # Disable the local ingress since we're using the main one
