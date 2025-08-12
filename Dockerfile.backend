@@ -1,0 +1,54 @@
+# HomeGenie Backend Docker Configuration
+FROM golang:1.22-alpine AS builder
+
+# Install git and ca-certificates for fetching dependencies
+RUN apk --no-cache add git ca-certificates tzdata
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o server ./cmd/server
+
+# Production stage
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS requests and tzdata for timezone
+RUN apk --no-cache add ca-certificates tzdata curl
+
+WORKDIR /root/
+
+# Copy the binary from builder stage
+COPY --from=builder /app/server .
+
+# Copy any additional files if needed (like migration files)
+COPY --from=builder /app/pkg/database/migrations.go ./migrations/
+
+# Create uploads directory for file storage
+RUN mkdir -p ./uploads
+
+# Add health check script
+RUN echo '#!/bin/sh' > /usr/local/bin/healthcheck.sh && \
+    echo 'curl -f http://localhost:8080/health || exit 1' >> /usr/local/bin/healthcheck.sh && \
+    chmod +x /usr/local/bin/healthcheck.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD /usr/local/bin/healthcheck.sh
+
+# Expose port
+EXPOSE 8080
+
+# Run the binary
+CMD ["./server"]

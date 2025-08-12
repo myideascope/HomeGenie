@@ -1,75 +1,211 @@
-# HomeGenie Development Docker Compose
+# HomeGenie Full-Stack Development Environment
 version: '3.8'
 
 services:
-  # Backend API
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: homegenie-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homegenie
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/pkg/database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d homegenie"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis (for caching and sessions)
+  redis:
+    image: redis:7-alpine
+    container_name: homegenie-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Go Backend API
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: ../Dockerfile.backend
+    container_name: homegenie-backend
+    restart: unless-stopped
+    environment:
+      # Database
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/homegenie?sslmode=disable
+      
+      # Redis
+      REDIS_URL: redis://redis:6379
+      
+      # JWT Configuration
+      JWT_SECRET: dev-secret-key-change-in-production-256-bit
+      JWT_EXPIRATION: 24h
+      
+      # Server Configuration
+      PORT: 8080
+      ENVIRONMENT: development
+      
+      # CORS Configuration - Allow frontend origin
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://frontend:80
+      
+      # File Storage
+      FILE_STORAGE_PATH: ./uploads
+      MAX_FILE_SIZE: 10485760
+      
+      # Logging
+      LOG_LEVEL: debug
+      
+      # Optional - Disable in development
+      JAEGER_ENDPOINT: ""
+      SENTRY_DSN: ""
     ports:
       - "8080:8080"
-    environment:
-      - API_PORT=8080
-      - API_HOST=0.0.0.0
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=homegenie
-      - DB_USER=homegenie
-      - DB_PASSWORD=password
-      - JWT_SECRET=dev-jwt-secret-key-32-chars-min
-      - REDIS_URL=redis://redis:6379
-      - ENVIRONMENT=development
-      - LOG_LEVEL=debug
+    volumes:
+      - backend_uploads:/root/uploads
     depends_on:
-      - postgres
-      - redis
-    networks:
-      - homegenie
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  # Frontend
+  # React Frontend
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: ../Dockerfile.frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8080/api/v1
+        VITE_WS_BASE_URL: ws://localhost:8080/ws
+        VITE_ENABLE_ANALYTICS: false
+        VITE_ENABLE_WEBSOCKETS: true
+    container_name: homegenie-frontend
+    restart: unless-stopped
     ports:
-      - "3000:3000"
-    environment:
-      - REACT_APP_API_URL=http://localhost:8080/api
-      - NODE_ENV=development
+      - "3000:80"
     depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx Reverse Proxy (Production-like setup)
+  nginx:
+    image: nginx:alpine
+    container_name: homegenie-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - frontend
       - backend
-    networks:
-      - homegenie
+    profiles:
+      - production
 
-  # Database
-  postgres:
-    image: postgres:15-alpine
+  # Jaeger for distributed tracing (optional)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: homegenie-jaeger
+    restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # HTTP collector
     environment:
-      - POSTGRES_DB=homegenie
-      - POSTGRES_USER=homegenie
-      - POSTGRES_PASSWORD=password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - homegenie
+      COLLECTOR_OTLP_ENABLED: true
+    profiles:
+      - monitoring
 
-  # Cache
-  redis:
-    image: redis:7-alpine
+  # Prometheus for metrics (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: homegenie-prometheus
+    restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "9090:9090"
     volumes:
-      - redis_data:/data
-    networks:
-      - homegenie
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    profiles:
+      - monitoring
+
+  # Grafana for dashboards (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: homegenie-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+
+  # Mail server for development (MailHog)
+  mailhog:
+    image: mailhog/mailhog
+    container_name: homegenie-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    profiles:
+      - development
 
 volumes:
   postgres_data:
+    name: homegenie_postgres_data
   redis_data:
+    name: homegenie_redis_data
+  backend_uploads:
+    name: homegenie_backend_uploads
+  nginx_logs:
+    name: homegenie_nginx_logs
+  prometheus_data:
+    name: homegenie_prometheus_data
+  grafana_data:
+    name: homegenie_grafana_data
 
 networks:
-  homegenie:
-    driver: bridge
+  default:
+    name: homegenie_network
